@@ -1,0 +1,608 @@
+---
+title: "Predicting Stock Market Direction Using Classification Models"
+author: "Manuela Lozano"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+---
+
+\newpage
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(quantmod)
+library(dplyr)
+library(MASS)
+library(class)
+library(caret)
+library(ggplot2)
+library(GGally)
+library(corrplot)
+library(pROC)
+set.seed(123)
+```
+
+
+# Abstract
+
+This study evaluates the ability of several classification models to predict daily stock market direction using lagged financial indicators. Using S&P 500 data from 2010 to 2024, logistic regression, Linear Discriminant Analysis (LDA), Quadratic Discriminant Analysis (QDA), and k-Nearest Neighbors (kNN) are implemented and compared. Model performance is assessed using out-of-sample accuracy, confusion matrices, cross-validation, and the Area Under the ROC Curve (AUC). The results show that all models perform close to random guessing, indicating limited predictive power. While kNN slightly outperforms the other models, the improvement is minimal, suggesting that any nonlinear patterns in the data are weak. Overall, the findings are consistent with the weak-form Efficient Market Hypothesis, indicating that past returns contain little useful information for predicting future market direction.
+
+---
+
+# Introduction
+
+## Background Information
+
+Predicting stock market movements has long been a central challenge in financial economics, as it directly impacts investment decisions, portfolio allocation, and risk management. According to the weak-form Efficient Market Hypothesis (EMH), asset prices fully incorporate all past price information, implying that historical returns should not provide reliable signals for forecasting future market direction. Even in cases where small predictive patterns may exist, their economic value is often limited once transaction costs, market friction, and risk considerations are taken into account.
+
+At the same time, classification methods from statistical learning provide a structured framework for evaluating whether predictive relationships exist in financial data. Techniques such as logistic regression, Linear Discriminant Analysis (LDA), Quadratic Discriminant Analysis (QDA), and k-Nearest Neighbors (kNN) are commonly used to model categorical outcomes and assess whether past information can be used to predict future events.
+
+## Research Question
+
+To what extent can lagged financial indicators predict daily stock market direction, and do nonlinear classification methods provide meaningful improvements over linear models?
+
+## Hypothesis
+
+We hypothesize that predictive performance will be limited, and that nonlinear models will not significantly outperform linear models, consistent with the Efficient Market Hypothesis.
+
+---
+
+# Data Description
+
+The data used in this study consists of daily S&P 500 index prices obtained from Yahoo Finance using the *quantmod* package in R. The sample period spans from January 2010 to January 2024, providing a total of 3,522 observations. Daily returns are computed from adjusted closing prices and serve as the primary variable of interest. 
+
+A binary response variable, Direction, is constructed to indicate whether the market increased ("Up") or decreased ("Down") on a given day. To capture potential temporal dependence, lagged returns from the previous five trading days (Lag1-Lag5) are created and used as predictors. These lagged variables ensure that only past information is used for prediction, avoiding look-ahead bias.
+
+```{r}
+# Download S&P 500 data from Yahoo Finance
+getSymbols("^GSPC", from = "2010-01-01", to = "2024-01-01")
+
+# Compute daily returns from closing prices
+returns <- dailyReturn(Cl(GSPC))
+
+# Convert to data frame
+data <- data.frame(
+  Date = index(returns),
+  Return = as.numeric(returns)
+)
+
+# Create binary response variable
+data$Direction <- ifelse(data$Return > 0, "Up", "Down")
+
+# Make Direction a factor
+data$Direction <- as.factor(data$Direction)
+
+head(data)
+str(data)
+
+# Create Lagged Predictors
+data <- data %>%
+  mutate(
+    Lag1 = lag(Return, 1),
+    Lag2 = lag(Return, 2),
+    Lag3 = lag(Return, 3),
+    Lag4 = lag(Return, 4),
+    Lag5 = lag(Return, 5)
+  ) %>%
+  na.omit()
+
+head(data)
+summary(data)
+```
+
+**Interpretation:**
+
+The summary statistics show that daily returns are centered close to zero, with small average values and occasional extreme movements. This is consistent with typical financial return data, where most daily changes are minor but large shocks can occur. The Direction variable is relatively balanced between "Up" and "Down", which is important for classification because it prevents accuracy from being driven by severe class imbalance.
+
+---
+
+# Exploratory Data Analysis
+
+```{r}
+# Basic Scatter Plot: Lag 1 vs. Lag 2
+ggplot(data, aes(x = Lag1, y = Lag2, color = Direction)) +
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "Lag1 vs Lag2 by Market Direction",
+    x = "Lag1",
+    y = "Lag2"
+  ) +
+  theme_minimal()
+
+# Different Combination Scatter Plots
+ggplot(data, aes(x = Lag1, y = Lag3, color = Direction)) +
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "Lag1 vs Lag3 by Market Direction",
+    x = "Lag1",
+    y = "Lag3"
+  ) +
+  theme_minimal()
+
+ggplot(data, aes(x = Lag2, y = Lag4, color = Direction)) +
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "Lag2 vs Lag4 by Market Direction",
+    x = "Lag2",
+    y = "Lag4"
+  ) +
+  theme_minimal()
+
+data_sample <- data[sample(nrow(data), 1000), ]
+
+ggpairs(
+  data_sample,
+  columns = c("Lag1", "Lag2", "Lag3", "Lag4", "Lag5"),
+  aes(color = Direction, alpha = 0.4)
+)
+
+corr_data <- cor(data[, c("Lag1", "Lag2", "Lag3", "Lag4", "Lag5")])
+corrplot(corr_data, method = "color", type = "upper")
+
+# Class Balance
+ggplot(data, aes(x = Direction, fill = Direction)) +
+  geom_bar() +
+  labs(
+    title = "Distribution of Market Direction",
+    x = "Direction",
+    y = "Count"
+  ) +
+  theme_minimal()
+```
+
+**Interpretation:**
+
+The exploratory plots reveal substantial overlap between observations classified as "Up" and "Down", with no clear separation between the two groups. Scatter plots such as Lag1 vs. Lag2 and Lag1 vs. Lag3 show that both classes occupy very similar regions in the feature space. The pair plot and correlation heatmap further confirm that lagged returns are only weakly correlated and do not exhibit strong distinguishing patterns. Overall, these results suggest that past returns provide limited information for predicting future market direction and that classification is inherently difficult.
+
+One possible explanation is that daily returns are largely driven by new information arriving in the market, which is inherently unpredictable and not captured by lagged return variables alone.
+
+---
+
+# Methodology
+
+## Training Strategy 
+
+The sample is split into a training set and a testing set based on time. Observations prior to 2022 are used for training, while observations from 2022 onward are used for testing. This preserves the time ordering of the data and better reflects a realistic forecasting setup.
+
+```{r}
+# Train/Test Split
+# Use data before 2022 as training, 2022 onward as testing
+train_data <- data %>% filter(Date < as.Date("2022-01-01"))
+test_data  <- data %>% filter(Date >= as.Date("2022-01-01"))
+
+nrow(train_data)
+nrow(test_data)
+```
+
+
+## Logistic Regression
+
+```{r}
+logit_fit <- glm(Direction ~ Lag1 + Lag2 + Lag3 + Lag4 + Lag5,
+                 data = train_data,
+                 family = binomial)
+
+summary(logit_fit)
+
+logit_probs <- predict(logit_fit, newdata = test_data, type = "response")
+logit_pred <- ifelse(logit_probs > 0.5, "Up", "Down")
+logit_pred <- factor(logit_pred, levels = c("Down", "Up"))
+
+lag1_seq <- seq(min(train_data$Lag1), max(train_data$Lag1), length.out = 200)
+lag2_seq <- seq(min(train_data$Lag2), max(train_data$Lag2), length.out = 200)
+
+grid <- expand.grid(Lag1 = lag1_seq, Lag2 = lag2_seq)
+grid$Lag3 <- mean(train_data$Lag3)
+grid$Lag4 <- mean(train_data$Lag4)
+grid$Lag5 <- mean(train_data$Lag5)
+
+grid$prob <- predict(logit_fit, newdata = grid, type = "response")
+grid$class <- ifelse(grid$prob > 0.5, "Up", "Down")
+grid$class <- factor(grid$class, levels = c("Down", "Up"))
+
+ggplot() +
+  geom_tile(data = grid, aes(x = Lag1, y = Lag2, fill = class), alpha = 0.3) +
+  geom_point(data = train_data, aes(x = Lag1, y = Lag2, color = Direction), alpha = 0.6) +
+  labs(
+    title = "Logistic Regression Decision Boundary",
+    x = "Lag1",
+    y = "Lag2"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c("Down" = "#F4A6A6", "Up" = "#9FE2E2")) +
+  scale_color_manual(values = c("Down" = "#D95F5F", "Up" = "#1FBFBF"))
+```
+
+**Interpretation:**
+
+The logistic regression results indicate that most lagged variables are not statistically significant predictors of market direction. At most, Lag1 shows limited evidence of predictive value, but the overall model fit remains weak, indicating that lagged returns do not provide strong predictive power for classifying market direction.
+
+
+## LDA
+
+```{r}
+lda_fit <- lda(Direction ~ Lag1 + Lag2 + Lag3 + Lag4 + Lag5,
+               data = train_data)
+
+lda_fit
+lda_pred <- predict(lda_fit, newdata = test_data)$class
+
+grid <- expand.grid(Lag1 = lag1_seq, Lag2 = lag2_seq)
+grid$Lag3 <- mean(train_data$Lag3)
+grid$Lag4 <- mean(train_data$Lag4)
+grid$Lag5 <- mean(train_data$Lag5)
+
+lda_grid_pred <- predict(lda_fit, newdata = grid)
+grid$class <- lda_grid_pred$class
+grid$prob <- lda_grid_pred$posterior[, "Up"]
+
+ggplot() +
+  geom_tile(data = grid, aes(x = Lag1, y = Lag2, fill = class), alpha = 0.3) +
+  geom_point(data = train_data, aes(x = Lag1, y = Lag2, color = Direction), alpha = 0.6) +
+  labs(
+    title = "LDA Decision Boundary",
+    x = "Lag1",
+    y = "Lag2"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c("Down" = "#F4A6A6", "Up" = "#9FE2E2")) +
+  scale_color_manual(values = c("Down" = "#D95F5F", "Up" = "#1FBFBF"))
+```
+
+**Interpretation:**
+
+LDA produces results similar to logistic regression, with limited separation between the two classes. The group means for the lagged variables are very close, indicating that these predictors do not strongly differentiate between upward and downward movements. This suggests that the linear decision boundary imposed by LDA is insufficient for capturing meaningful patterns in the data.
+
+
+## QDA
+
+```{r}
+qda_fit <- qda(Direction ~ Lag1 + Lag2 + Lag3 + Lag4 + Lag5,
+               data = train_data)
+
+qda_fit
+qda_pred <- predict(qda_fit, newdata = test_data)$class
+qda_probs <- predict(qda_fit, newdata = test_data)$posterior[, "Up"]
+
+grid <- expand.grid(Lag1 = lag1_seq, Lag2 = lag2_seq)
+grid$Lag3 <- mean(train_data$Lag3)
+grid$Lag4 <- mean(train_data$Lag4)
+grid$Lag5 <- mean(train_data$Lag5)
+
+qda_grid_pred <- predict(qda_fit, newdata = grid)
+grid$class <- qda_grid_pred$class
+grid$prob <- qda_grid_pred$posterior[, "Up"]
+
+ggplot() +
+  geom_tile(data = grid, aes(x = Lag1, y = Lag2, fill = class), alpha = 0.3) +
+  geom_point(data = train_data, aes(x = Lag1, y = Lag2, color = Direction), alpha = 0.6) +
+  labs(
+    title = "QDA Decision Boundary",
+    x = "Lag1",
+    y = "Lag2"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c("Down" = "#F4A6A6", "Up" = "#9FE2E2")) +
+  scale_color_manual(values = c("Down" = "#D95F5F", "Up" = "#1FBFBF"))
+```
+
+**Interpretation:**
+
+QDA allows for more flexible decision boundaries by modeling different covariance structures for each class. However, its performance is worse than both logistic regression and LDA. This suggests that increasing model flexibility does not improve predictive performance and may instead amplify noise when the underlying signal in the data is weak.
+
+
+## kNN
+
+```{r}
+train_x <- train_data %>% dplyr::select(Lag1, Lag2, Lag3, Lag4, Lag5)
+test_x  <- test_data  %>% dplyr::select(Lag1, Lag2, Lag3, Lag4, Lag5)
+
+train_means <- sapply(train_x, mean)
+train_sds   <- sapply(train_x, sd)
+
+train_x_scaled <- scale(train_x, center = train_means, scale = train_sds)
+test_x_scaled  <- scale(test_x, center = train_means, scale = train_sds)
+
+train_y <- train_data$Direction
+test_y  <- test_data$Direction
+
+knn_pred <- knn(train = train_x_scaled,
+                test = test_x_scaled,
+                cl = train_y,
+                k = 5)
+
+knn_acc <- mean(knn_pred == test_y)
+knn_acc
+
+grid <- expand.grid(Lag1 = lag1_seq, Lag2 = lag2_seq)
+grid$Lag3 <- mean(train_data$Lag3)
+grid$Lag4 <- mean(train_data$Lag4)
+grid$Lag5 <- mean(train_data$Lag5)
+
+grid_scaled <- scale(
+  grid[, c("Lag1", "Lag2", "Lag3", "Lag4", "Lag5")],
+  center = train_means,
+  scale = train_sds
+)
+
+grid$class <- knn(
+  train = train_x_scaled,
+  test = grid_scaled,
+  cl = train_y,
+  k = 5
+)
+
+ggplot() +
+  geom_tile(data = grid, aes(x = Lag1, y = Lag2, fill = class), alpha = 0.3) +
+  geom_point(data = train_data, aes(x = Lag1, y = Lag2, color = Direction), alpha = 0.6) +
+  labs(
+    title = "kNN Decision Boundary (k = 5)",
+    x = "Lag1",
+    y = "Lag2"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c("Down" = "#F4A6A6", "Up" = "#9FE2E2")) +
+  scale_color_manual(values = c("Down" = "#D95F5F", "Up" = "#1FBFBF"))
+```
+
+**Interpretation:**
+
+The kNN model achieves the highest test accuracy among the models considered. However, the improvement is modest, with accuracy only slightly above 50%. This suggests that while local nonlinear patterns may exist in the data, they are weak and do not substantially enhance predictive performance.
+
+
+## Cross Validation for ALL Models
+
+To ensure a fair comparison across methods, 10-fold cross-validation is implemented not only for kNN but also for logistic regression, LDA, and QDA. This provides a more rigorous evaluation of model performance and helps determine whether the conclusions hold across repeated resampling.
+
+```{r}
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  savePredictions = "final"
+)
+
+# caret expects the first level to be the "event" for twoClassSummary
+train_data_cv <- train_data
+train_data_cv$Direction <- factor(train_data_cv$Direction, levels = c("Up", "Down"))
+
+logit_cv <- train(
+  Direction ~ Lag1 + Lag2 + Lag3 + Lag4 + Lag5,
+  data = train_data_cv,
+  method = "glm",
+  family = "binomial",
+  metric = "ROC",
+  trControl = ctrl
+)
+
+lda_cv <- train(
+  Direction ~ Lag1 + Lag2 + Lag3 + Lag4 + Lag5,
+  data = train_data_cv,
+  method = "lda",
+  metric = "ROC",
+  trControl = ctrl
+)
+
+qda_cv <- train(
+  Direction ~ Lag1 + Lag2 + Lag3 + Lag4 + Lag5,
+  data = train_data_cv,
+  method = "qda",
+  metric = "ROC",
+  trControl = ctrl
+)
+
+knn_cv <- train(
+  Direction ~ Lag1 + Lag2 + Lag3 + Lag4 + Lag5,
+  data = train_data_cv,
+  method = "knn",
+  metric = "ROC",
+  trControl = ctrl,
+  tuneLength = 15,
+  preProcess = c("center", "scale")
+)
+
+logit_cv
+lda_cv
+qda_cv
+knn_cv
+
+best_k <- knn_cv$bestTune$k
+
+knn_best_pred <- knn(
+  train = train_x_scaled,
+  test = test_x_scaled,
+  cl = train_y,
+  k = best_k
+)
+
+plot(knn_cv)
+```
+
+**Interpretation:**
+
+The cross-validation results show that all models achieve ROC values close to 0.5, indicating very weak predictive performance. Logistic regression and LDA perform slightly better than QDA, while kNN achieves comparable performance after tuning. Although cross-validation helps select the optimal hyperparameters and reduces overfitting, it does not lead to meaningful improvements in prediction accuracy. This suggests that the limitation lies in the data itself rather than the modeling approach, as lagged returns contain little useful information for forecasting market direction.
+
+---
+
+# Results
+
+## Accuracy Comparison
+
+```{r}
+logit_acc <- mean(logit_pred == test_data$Direction)
+lda_acc   <- mean(lda_pred == test_data$Direction)
+qda_acc   <- mean(qda_pred == test_data$Direction)
+knn_acc   <- mean(knn_pred == test_y)
+knn_best_acc <- mean(knn_best_pred == test_y)
+
+cv_results <- data.frame(
+  Model = c("Logistic Regression", "LDA", "QDA", "kNN"),
+  Test_Accuracy = c(logit_acc, lda_acc, qda_acc, knn_best_acc),
+  CV_ROC = c(
+    max(logit_cv$results$ROC),
+    max(lda_cv$results$ROC),
+    max(qda_cv$results$ROC),
+    max(knn_cv$results$ROC)
+  ),
+  Type = c("Linear", "Linear", "Nonlinear", "Nonlinear")
+)
+
+cv_results
+```
+
+**Interpretation:**
+
+The accuracy results show that all models perform close to 50%, indicating that they are only slightly better than random guessing. While kNN achieves the highest test accuracy, the improvement over the linear models is minimal. The cross-validation ROC values, all around 0.51–0.53, further confirm that none of the models have strong predictive ability. Overall, these results suggest that both linear and nonlinear models struggle to extract meaningful signals from lagged returns, reinforcing the conclusion that predictive power is very limited.
+
+
+## Training vs Testing Accuracy
+
+```{r}
+logit_train_probs <- predict(logit_fit, type = "response")
+logit_train_pred <- ifelse(logit_train_probs > 0.5, "Up", "Down")
+logit_train_pred <- factor(logit_train_pred, levels = c("Down", "Up"))
+
+lda_train_acc <- mean(predict(lda_fit)$class == train_data$Direction)
+qda_train_acc <- mean(predict(qda_fit)$class == train_data$Direction)
+logit_train_acc <- mean(logit_train_pred == train_data$Direction)
+knn_train_pred <- knn(train_x_scaled, train_x_scaled, train_y, k = 5)
+knn_train_acc <- mean(knn_train_pred == train_y)
+
+performance <- data.frame(
+  Model = rep(c("Logistic", "LDA", "QDA", "kNN"), each = 2),
+  Type = rep(c("Train", "Test"), times = 4),
+  Accuracy = c(
+    logit_train_acc, logit_acc,
+    lda_train_acc, lda_acc,
+    qda_train_acc, qda_acc,
+    knn_train_acc, knn_acc
+  )
+)
+
+ggplot(performance, aes(x = Model, y = Accuracy, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Training vs Testing Accuracy by Model") +
+  theme_minimal()
+```
+
+**Interpretation:**
+
+Training accuracy is consistently higher than testing accuracy across all models, indicating some degree of overfitting. This is particularly evident for kNN, which achieves higher training accuracy due to its flexibility. However, the gap between training and testing performance is relatively small, suggesting that none of the models severely overfit the data.
+
+## Confusion Matrices
+
+```{r}
+confusionMatrix(logit_pred, test_data$Direction)
+confusionMatrix(lda_pred, test_data$Direction)
+confusionMatrix(qda_pred, test_data$Direction)
+confusionMatrix(knn_pred, test_y)
+confusionMatrix(knn_best_pred, test_y)
+```
+
+**Interpretation:**
+
+The confusion matrices reveal that all models struggle to correctly classify both upward and downward market movements. Logistic regression and LDA exhibit very low sensitivity, meaning they fail to correctly identify many downward movements. QDA performs worse overall, reflecting its tendency to overfit noise. While kNN provides a more balanced classification and slightly higher accuracy, it still produces a large number of misclassifications. Overall, these results confirm that predictive performance is limited and that no model achieves reliable classification accuracy.
+
+
+## ROC Curves and AUC
+
+To complement accuracy, ROC curves and AUC are used to evaluate each model’s ability to discriminate between the two classes across all classification thresholds.
+
+```{r}
+# Relevel so that "Up" is the positive class for ROC calculations
+test_direction_up <- factor(test_data$Direction, levels = c("Down", "Up"))
+
+lda_probs <- predict(lda_fit, newdata = test_data)$posterior[, "Up"]
+
+# QDA probabilities were created earlier
+# kNN class::knn does not return probabilities, so use caret probabilities
+knn_cv_probs <- predict(knn_cv, newdata = test_data, type = "prob")[, "Up"]
+
+roc_logit <- roc(response = test_direction_up, predictor = logit_probs, levels = c("Down", "Up"), direction = "<")
+roc_lda   <- roc(response = test_direction_up, predictor = lda_probs, levels = c("Down", "Up"), direction = "<")
+roc_qda   <- roc(response = test_direction_up, predictor = qda_probs, levels = c("Down", "Up"), direction = "<")
+roc_knn   <- roc(response = test_direction_up, predictor = knn_cv_probs, levels = c("Down", "Up"), direction = "<")
+
+auc_table <- data.frame(
+  Model = c("Logistic Regression", "LDA", "QDA", "CV kNN"),
+  AUC = c(
+    as.numeric(auc(roc_logit)),
+    as.numeric(auc(roc_lda)),
+    as.numeric(auc(roc_qda)),
+    as.numeric(auc(roc_knn))
+  )
+)
+
+auc_table
+
+plot(roc_logit, col = "black", main = "ROC Curves for Classification Models")
+plot(roc_lda, add = TRUE, col = "blue")
+plot(roc_qda, add = TRUE, col = "red")
+plot(roc_knn, add = TRUE, col = "darkgreen")
+legend(
+  "bottomright",
+  legend = c("Logistic", "LDA", "QDA", "CV kNN"),
+  col = c("black", "blue", "red", "darkgreen"),
+  lwd = 2
+)
+```
+
+**Interpretation:**
+
+The ROC curves further confirm the limited predictive power of all models. The AUC values are close to 0.5 for logistic regression, LDA, and QDA, indicating that these models perform no better than random guessing. The cross-validated kNN model achieves the highest AUC (approximately 0.54), but this improvement is still very small and not practically meaningful. Overall, the ROC analysis reinforces the conclusion that lagged returns provide little useful information for predicting market direction.
+
+## Linear vs. Nonlinear Discussion
+
+```{r}
+linear_acc <- mean(c(logit_acc, lda_acc))
+nonlinear_acc <- mean(c(qda_acc, knn_best_acc))
+
+comparison <- data.frame(
+  Type = c("Linear Models", "Nonlinear Models"),
+  AverageAccuracy = c(linear_acc, nonlinear_acc)
+)
+
+comparison
+```
+
+**Interpretation:**
+
+Although nonlinear models show a slight improvement in accuracy compared to linear models, the difference is extremely small and not statistically or economically meaningful. This suggests that the underlying relationship between lagged returns and market direction is either very weak or nonexistent. Increasing model flexibility does not uncover additional structure in the data, indicating that the limitation lies in the predictors rather than the model choice.
+
+---
+
+# Conclusion and Future Work 
+
+## Economic Interpretation
+
+From an economic perspective, the results of this study are consistent with the weak-form Efficient Market Hypothesis. The low predictive accuracy observed across all models suggests that historical returns contain little exploitable information for forecasting future market direction. While kNN achieves slightly higher accuracy than the other methods, the gain is minimal and unlikely to be economically meaningful.
+
+From a practical standpoint, a predictive accuracy of approximately 53% is unlikely to generate consistent profits once transaction costs, bid-ask spreads, trading frictions, and risk are considered. In many financial settings, a model would need substantially higher predictive accuracy to be economically viable. Therefore, the observed performance is not only statistically weak but also economically insignificant.
+
+## Final Thoughts 
+
+Overall, this study demonstrates that stock market direction is difficult to predict using lagged financial indicators alone. While classification models provide a useful framework for evaluating predictive relationships, their performance remains close to random guessing in this setting. In addition, nonlinear models do not meaningfully outperform linear alternatives, suggesting that increasing model complexity does not substantially improve prediction.
+
+Ultimately, this study highlights a fundamental challenge in financial forecasting: even reasonably sophisticated statistical models struggle to outperform randomness when relying solely on historical price information.
+
+## Future Work
+
+Future research could explore the inclusion of additional predictors beyond lagged returns, such as macroeconomic variables, interest rates, volatility indices, trading volume, or investor sentiment measures. These variables may capture broader economic conditions that are not reflected in past returns alone.
+
+In addition, more advanced machine learning methods, such as random forests, support vector machines, gradient boosting, or neural networks, could be applied to test whether more complex nonlinear relationships exist. Future analysis could also examine different forecasting horizons to determine whether predictability varies across time scales.
+
+---
+
+# References
+
+Dave's Monetary Economics. (n.d.). Trading costs and efficient financial markets.
+https://sites.google.com/site/davesmant/monetary-economics/rational-efficient-financial-markets/trading-costs
+
+James, G., Witten, D., Hastie, T., & Tibshirani, R. (n.d.). Classification lab. In An Introduction to Statistical Learning (Python edition).
+https://islp.readthedocs.io/en/latest/labs/Ch04-classification-lab.html
+
+James, G., Witten, D., Hastie, T., & Tibshirani, R. (n.d.). Smarket dataset. In An Introduction to Statistical Learning (Python edition).
+https://islp.readthedocs.io/en/latest/datasets/Smarket.html

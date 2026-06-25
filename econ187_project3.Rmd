@@ -1,0 +1,743 @@
+---
+title: "Predicting Restaurant Success Using Machine Learning Classification Models"
+author: "Manuela Lozano"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+    latex_engine: xelatex
+---
+
+\newpage
+
+# Abstract
+
+This project applies several machine learning classification methods to predict restaurant success using operational, marketing, customer-demand, and financial variables. The models evaluated include Classification Trees, Random Forest, Boosting, Neural Networks, and Support Vector Machines, with additional exploratory analysis using K-means clustering. Model performance was evaluated using accuracy, ROC-AUC, confusion matrices, and 10-fold cross-validation. The results indicate that nonlinear ensemble methods, particularly Random Forest and Boosting, substantially outperform simpler classification approaches. Important predictors of restaurant success include marketing budget, social media followers, weekend reservations, and Google ratings. The findings suggest that digital visibility and customer engagement play major roles in determining business performance within the restaurant industry.
+
+---
+
+# Introduction
+
+## Background Information
+
+The restaurant industry is highly competitive and economically significant, with restaurant success depending on a combination of operational efficiency, customer demand, pricing strategies, marketing, and online visibility. In recent years, digital platforms such as Yelp, Google Reviews, and social media have become increasingly important in shaping consumer behavior and influencing restaurant performance. Online ratings, customer engagement, and digital marketing efforts now play a major role in attracting customers and generating revenue.
+
+Because restaurant success depends on many interacting factors, machine learning methods have become useful tools for predicting business performance. Previous studies have applied machine learning techniques such as decision trees, Random Forest, boosting methods, and neural networks to analyze restaurant-related datasets and identify the variables most strongly associated with business success. Research using Yelp data has shown that online reviews, ratings, and customer engagement metrics are closely linked to restaurant popularity and long-term performance.
+
+This project builds on prior restaurant prediction research by applying several machine learning classification models to a restaurant success dataset containing operational, financial, customer-demand, and marketing variables. The goal is to determine which machine learning method best predicts restaurant success and to identify the business characteristics most associated with successful restaurant performance.
+
+## Research Question
+
+Can machine learning models accurately predict restaurant success using business, customer-demand, marketing, and operational characteristics?
+
+## Hypothesis
+
+Nonlinear machine learning models, especially Random Forest and Boosting, will predict restaurant success better than a single Classification Tree because restaurant success likely depends on complex interactions between factors such as Google rating, marketing budget, social media followers, pricing, reservations, and revenue.
+
+---
+
+```{r, warning=FALSE, message=FALSE, include=FALSE, error=TRUE}
+# Loading packages
+library(tidyverse)
+library(caret)
+
+# Visualization
+library(GGally)
+library(corrplot)
+library(factoextra)
+
+# Machine learning
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(gbm)
+library(nnet)
+library(e1071)
+
+# Evaluation
+library(pROC)
+
+library(smotefamily)
+library(themis)
+```
+
+# Data Description
+
+```{r, warning=FALSE, message=FALSE, error=TRUE}
+# Load data
+restaurants <- read.csv("~/Documents/UCLA/YEAR 4/SPRING 2026/ECON 187/PROJECT 3/Restaurant_Success_Dataset.csv")
+
+# Look at the data
+head(restaurants)
+str(restaurants)
+
+# Convert categorical variables
+restaurants$City <- as.factor(restaurants$City)
+restaurants$Cuisine_Type <- as.factor(restaurants$Cuisine_Type)
+restaurants$Delivery_Service <- as.factor(restaurants$Delivery_Service)
+
+# Convert target variable to factor for classification
+restaurants$Success_Label <- as.factor(restaurants$Success_Label)
+
+# Remove ID column and Annual Revenue
+restaurants <- restaurants %>%
+  select(-Restaurant_ID, -Annual_Revenue)
+```
+
+The dataset contains 1,000 restaurants and includes a combination of operational, marketing, customer-demand, and business characteristic variables. Numerical predictors include average meal price, seating capacity, years in business, Google rating, social media followers, weekend reservations, staff count, marketing budget, and health inspection score. Categorical variables include city, cuisine type, and delivery service availability. The target variable, Success_Label, classifies restaurants as successful or unsuccessful.
+
+Annual Revenue was intentionally removed from the predictor set to avoid potential data leakage. Because revenue is highly associated with business success, including it as a predictor could artificially inflate model performance by allowing the algorithms to indirectly learn the target outcome itself rather than the underlying operational and marketing characteristics associated with restaurant success.
+
+---
+
+# Exploratory Data Analysis
+
+```{r, warning=FALSE, message=FALSE, error=TRUE}
+# Missing values
+colSums(is.na(restaurants))
+
+# Summary Statistics
+summary(restaurants)
+
+# Check class balance
+table(restaurants$Success_Label)
+prop.table(table(restaurants$Success_Label))
+
+# Class Imbalance
+ggplot(restaurants, aes(x = Success_Label, fill = Success_Label)) +
+  geom_bar() +
+  labs(
+    title = "Distribution of Restaurant Success",
+    x = "Success Label",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+# Numerical Variable Distribution
+numeric_vars <- restaurants %>%
+  select(where(is.numeric))
+
+numeric_vars %>%
+  pivot_longer(cols = everything()) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~name, scales = "free") +
+  theme_minimal()
+
+# Correlation Heatmap
+library(corrplot)
+
+cor_matrix <- numeric_vars %>%
+  cor()
+
+corrplot(
+  cor_matrix,
+  method = "color",
+  type = "upper",
+  tl.cex = 0.8
+)
+
+# Boxplot by Success Label
+ggplot(restaurants, aes(x = Success_Label, y = Google_Rating, fill = Success_Label)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Google Rating by Restaurant Success")
+
+# Multiple Variables
+restaurants %>%
+  pivot_longer(
+    cols = c(
+      Average_Meal_Price,
+      Seating_Capacity,
+      Years_in_Business,
+      Google_Rating,
+      Social_Media_Followers,
+      Weekend_Reservations,
+      Staff_Count,
+      Marketing_Budget
+    ),
+    names_to = "Variable",
+    values_to = "Value"
+  ) %>%
+  ggplot(aes(x = Success_Label, y = Value, fill = Success_Label)) +
+  geom_boxplot() +
+  facet_wrap(~Variable, scales = "free") +
+  theme_minimal()
+
+# Categorical Variable Analysis
+# Cuisine Type vs. Success
+ggplot(restaurants, aes(x = Cuisine_Type, fill = Success_Label)) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  labs(
+    title = "Success Rate by Cuisine Type",
+    y = "Proportion"
+  ) +
+  coord_flip()
+
+# City Analysis
+ggplot(restaurants, aes(x = City, fill = Success_Label)) +
+  geom_bar(position = "fill") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Restaurant Success Across Cities")
+
+# Scatterplot
+# Pair Plot
+library(GGally)
+library(factoextra)
+library(cluster)
+
+restaurants %>%
+  select(
+    Google_Rating,
+    Marketing_Budget,
+    Social_Media_Followers,
+    Weekend_Reservations,
+    Health_Inspection_Score,
+    Success_Label
+  ) %>%
+  ggpairs(aes(color = Success_Label))
+
+# K-Means
+scaled_data <- restaurants %>%
+  select(
+    Average_Meal_Price,
+    Google_Rating,
+    Social_Media_Followers,
+    Weekend_Reservations,
+    Marketing_Budget
+  ) %>%
+  scale()
+
+set.seed(123)
+
+km <- kmeans(scaled_data, centers = 4)
+
+fviz_cluster(
+  km,
+  data = scaled_data,
+  ellipse.type = "norm",
+  geom = "point",
+  ggtheme = theme_minimal(),
+  main = "Restaurant Clusters"
+)
+```
+
+The exploratory data analysis reveals several important patterns related to restaurant success. The dataset contains moderate class imbalance, with approximately 68% of restaurants labeled as successful and 32% labeled as unsuccessful. Histograms show that most numerical variables are relatively well distributed, with no severe skewness or extreme outliers that would substantially distort model performance.
+
+The boxplots suggest that successful restaurants generally have higher Google ratings, larger marketing budgets, more social media followers, and more weekend reservations than unsuccessful restaurants. In particular, social media followers and marketing budget appear to have strong separation between the two classes, suggesting that digital visibility and advertising may play major roles in restaurant performance.
+
+The correlation heatmap indicates that multicollinearity among predictors is relatively low, which is beneficial for machine learning models because it reduces redundancy among variables. The K-means clustering analysis also suggests that restaurants naturally group into distinct business profiles based on pricing, marketing intensity, customer demand, and online engagement characteristics. Overall, the exploratory analysis provides evidence that nonlinear relationships and interactions may exist within the data, supporting the use of more advanced machine learning methods such as Random Forest, Boosting, and Neural Networks.
+
+The K-means clustering analysis suggests that restaurants naturally separate into distinct business profiles based on marketing intensity, online engagement, pricing, and customer demand characteristics. Although the clusters overlap somewhat, the visualization indicates that certain groups of restaurants share similar operational and customer behavior patterns.
+
+One cluster appears to contain restaurants with lower marketing budgets, fewer social media followers, and lower reservation activity, characteristics that are more commonly associated with unsuccessful restaurants. In contrast, another cluster appears to group restaurants with stronger online engagement, higher marketing investment, and greater reservation demand, traits that align more closely with successful restaurant performance.
+
+These findings suggest that restaurant success may not depend on a single variable alone, but rather on broader combinations of business characteristics and customer engagement patterns. The clustering results therefore support the later machine learning findings, particularly the importance of marketing budget, social media presence, and reservation activity in predicting restaurant success.
+
+---
+
+# Methodology
+
+Several machine learning classification methods were applied to predict restaurant success, including Classification Trees, Random Forest, Boosting, Neural Networks, and Support Vector Machines. These models were selected because they capture nonlinear relationships and interactions that are likely present in restaurant performance data.
+
+The dataset was divided into training and testing sets using an 80/20 split to evaluate out-of-sample predictive performance. Because the dataset contains moderate class imbalance, SMOTE (Synthetic Minority Oversampling Technique) was applied to the training data. SMOTE generates synthetic observations for the minority class rather than duplicating existing observations, helping reduce bias toward the majority class and improving the models’ ability to identify unsuccessful restaurants.
+
+Model performance was evaluated using confusion matrices, accuracy, sensitivity, specificity, balanced accuracy, ROC curves, and ROC-AUC values. ROC-AUC was particularly important because it evaluates classification performance across different probability thresholds and is more informative than accuracy alone in imbalanced classification settings. Additionally, 10-fold cross-validation was used for Neural Networks and Support Vector Machines to reduce overfitting and improve model reliability.
+
+## Train/Test Split
+
+```{r, warning=FALSE, message=FALSE, error=TRUE}
+# Convert target variable BEFORE train/test split
+restaurants$Success_Label <- factor(
+  restaurants$Success_Label,
+  levels = c(0, 1),
+  labels = c("Unsuccessful", "Successful")
+)
+
+# Train/test split
+set.seed(123)
+
+train_index <- createDataPartition(
+  restaurants$Success_Label,
+  p = 0.80,
+  list = FALSE
+)
+
+train_data <- restaurants[train_index, ]
+test_data <- restaurants[-train_index, ]
+
+# SMOTE
+set.seed(123)
+
+smote_recipe <- recipe(Success_Label ~ ., data = train_data) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_smote(Success_Label)
+
+smote_prep <- prep(smote_recipe)
+
+train_data_smote <- bake(smote_prep, new_data = NULL)
+test_data_processed <- bake(smote_prep, new_data = test_data)
+
+# Check balance
+table(train_data_smote$Success_Label)
+table(test_data_processed$Success_Label)
+
+# Cross-validation
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  savePredictions = TRUE
+)
+```
+
+## Cross Validation
+
+```{r, warning=FALSE, message=FALSE, error=TRUE}
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  savePredictions = TRUE
+)
+
+combined <- bind_rows(
+  train_data_smote %>% mutate(Set = "Training"),
+  test_data_processed %>% mutate(Set = "Testing")
+)
+```
+
+---
+
+# Results 
+
+## Classification Tree
+
+```{r, warning=FALSE, message=FALSE, error=TRUE}
+set.seed(123)
+
+tree_model <- rpart(
+  Success_Label ~ .,
+  data = train_data_smote,
+  method = "class"
+)
+
+rpart.plot(
+  tree_model,
+  type = 2,
+  extra = 104,
+  fallen.leaves = TRUE,
+  main = "Classification Tree for Restaurant Success"
+)
+
+tree_pred <- predict(
+  tree_model,
+  test_data_processed,
+  type = "class"
+)
+
+tree_prob <- predict(tree_model, test_data_processed, type = "prob")[, "Successful"]
+
+tree_cm <- confusionMatrix(
+  tree_pred,
+  test_data_processed$Success_Label
+)
+
+tree_cm
+
+tree_accuracy <- tree_cm$overall["Accuracy"]
+
+tree_roc <- roc(
+  response = test_data_processed$Success_Label,
+  predictor = tree_prob,
+  levels = c("Unsuccessful", "Successful")
+)
+
+plot(tree_roc, main = "ROC Curve - Classification Tree")
+
+tree_auc <- auc(tree_roc)
+
+tree_accuracy
+tree_auc
+```
+
+The Classification Tree achieved strong predictive performance, with an accuracy of approximately 96% and an ROC-AUC of 0.978. The tree identified marketing budget, Google rating, weekend reservations, and social media followers as some of the most important variables in determining restaurant success.
+
+The structure of the tree suggests that restaurants with low marketing budgets, fewer reservations, and weaker online engagement were more likely to be classified as unsuccessful. Although the Classification Tree performed very well, single decision trees can be sensitive to small changes in the data and may overfit certain patterns. Nevertheless, the model provides highly interpretable decision rules that clearly illustrate the factors associated with restaurant success.
+
+## Random Forest
+
+```{r, warning=FALSE, message=FALSE, error=TRUE}
+set.seed(123)
+
+rf_model <- randomForest(
+  Success_Label ~ .,
+  data = train_data_smote,
+  ntree = 300,
+  importance = TRUE
+)
+
+rf_pred <- predict(
+  rf_model,
+  test_data_processed
+)
+
+rf_prob <- predict(rf_model, test_data_processed, type = "prob")[, "Successful"]
+
+rf_cm <- confusionMatrix(
+  rf_pred,
+  test_data_processed$Success_Label
+)
+
+rf_cm
+
+rf_accuracy <- rf_cm$overall["Accuracy"]
+
+rf_roc <- roc(
+  response = test_data_processed$Success_Label,
+  predictor = rf_prob,
+  levels = c("Unsuccessful", "Successful")
+)
+
+plot(rf_roc, main = "ROC Curve - Random Forest")
+
+rf_auc <- auc(rf_roc)
+
+varImpPlot(
+  rf_model,
+  main = "Random Forest Variable Importance"
+)
+
+rf_accuracy
+rf_auc
+```
+
+Random Forest produced one of the strongest performances among all models, achieving approximately 95.5% accuracy and an ROC-AUC near 1.0. The model substantially improved upon the single Classification Tree by combining many decision trees and averaging their predictions, which reduces variance and improves generalization performance.
+
+The variable importance plots indicate that marketing budget, social media followers, weekend reservations, and Google rating were the most influential predictors of restaurant success. These findings suggest that customer engagement and digital visibility are highly important business characteristics within the restaurant industry.
+
+Although the Classification Tree achieved slightly higher raw accuracy, Random Forest improved overall probabilistic classification performance and robustness by averaging predictions across many trees. Overall, Random Forest demonstrated exceptional predictive ability while remaining relatively robust to overfitting.
+
+## Boosting
+
+```{r, warning=FALSE, message=FALSE, error=TRUE}
+train_gbm <- train_data_smote
+test_gbm <- test_data_processed
+
+# Convert target to numeric for GBM
+train_gbm$Success_Label <- ifelse(
+  train_gbm$Success_Label == "Successful",
+  1,
+  0
+)
+
+test_gbm$Success_Label <- ifelse(
+  test_gbm$Success_Label == "Successful",
+  1,
+  0
+)
+
+set.seed(123)
+
+boost_model <- gbm(
+  Success_Label ~ .,
+  data = train_gbm,
+  distribution = "bernoulli",
+  n.trees = 300,
+  interaction.depth = 3,
+  shrinkage = 0.01,
+  verbose = FALSE
+)
+
+# Predictions
+boost_prob <- predict(
+  boost_model,
+  newdata = test_gbm,
+  n.trees = 300,
+  type = "response"
+)
+
+boost_pred <- ifelse(
+  boost_prob > 0.5,
+  "Successful",
+  "Unsuccessful"
+)
+
+boost_pred <- factor(
+  boost_pred,
+  levels = c("Unsuccessful", "Successful")
+)
+
+# Confusion Matrix
+boost_cm <- confusionMatrix(
+  boost_pred,
+  test_data_processed$Success_Label
+)
+
+boost_cm
+
+# Accuracy
+boost_accuracy <- boost_cm$overall["Accuracy"]
+
+# ROC Curve
+boost_roc <- roc(
+  response = test_data_processed$Success_Label,
+  predictor = boost_prob,
+  levels = c("Unsuccessful", "Successful")
+)
+
+plot(
+  boost_roc,
+  main = "ROC Curve - Boosting"
+)
+
+# AUC
+boost_auc <- auc(boost_roc)
+
+boost_accuracy
+boost_auc
+```
+
+The Boosting model also achieved extremely strong performance, with approximately 94% accuracy and an ROC-AUC of 0.997. Boosting works by sequentially building decision trees that focus on correcting errors made by previous trees, allowing the model to capture complex nonlinear relationships within the data.
+
+The model demonstrated particularly strong sensitivity, meaning it was highly effective at identifying unsuccessful restaurants. This is economically important because identifying potential business failure may be more valuable to investors and restaurant owners than simply identifying successful businesses.
+
+Although Boosting slightly underperformed Random Forest in overall accuracy and ROC-AUC, it still demonstrated excellent predictive performance and confirmed the importance of nonlinear ensemble methods for restaurant success prediction.
+
+## Neural Network
+
+```{r, warning=FALSE, message=FALSE, error=TRUE}
+set.seed(123)
+
+nn_model <- train(
+  Success_Label ~ .,
+  data = train_data_smote,
+  method = "nnet",
+  trControl = ctrl,
+  metric = "ROC",
+  preProcess = c("center", "scale"),
+  tuneGrid = expand.grid(
+    size = c(3, 5, 7),
+    decay = c(0.001, 0.01, 0.1)
+  ),
+  trace = FALSE,
+  maxit = 500
+)
+
+nn_model
+
+nn_pred <- predict(
+  nn_model,
+  newdata = test_data_processed
+)
+
+nn_prob <- predict(
+  nn_model,
+  newdata = test_data_processed,
+  type = "prob"
+)[, "Successful"]
+
+nn_cm <- confusionMatrix(
+  nn_pred,
+  test_data_processed$Success_Label
+)
+
+nn_cm
+
+nn_accuracy <- nn_cm$overall["Accuracy"]
+
+nn_roc <- roc(
+  response = test_data_processed$Success_Label,
+  predictor = nn_prob,
+  levels = c("Unsuccessful", "Successful")
+)
+
+plot(nn_roc, main = "ROC Curve - Neural Network")
+
+nn_auc <- auc(nn_roc)
+
+nn_accuracy
+nn_auc
+nn_model$bestTune
+```
+
+The Neural Network achieved lower performance than the tree-based ensemble methods, with approximately 87% accuracy and an ROC-AUC of 0.945. While the model still performed well overall, it struggled more with classifying unsuccessful restaurants compared to Random Forest and Boosting.
+
+One possible explanation is that Neural Networks often require much larger datasets to fully capture complex nonlinear patterns. In structured tabular datasets such as this one, tree-based ensemble methods frequently outperform neural networks because they can more efficiently model interactions between categorical and numerical predictors.
+
+Despite underperforming relative to Random Forest and Boosting, the Neural Network still demonstrated strong predictive capability and confirmed the existence of nonlinear relationships within the data.
+
+## Support Vector Machine
+
+```{r, warning=FALSE, message=FALSE, error=TRUE}
+set.seed(123)
+
+svm_model <- train(
+  Success_Label ~ .,
+  data = train_data_smote,
+  method = "svmRadial",
+  trControl = ctrl,
+  metric = "ROC",
+  preProcess = c("center", "scale"),
+  tuneLength = 5
+)
+
+svm_model
+
+svm_pred <- predict(
+  svm_model,
+  newdata = test_data_processed
+)
+
+svm_prob <- predict(
+  svm_model,
+  newdata = test_data_processed,
+  type = "prob"
+)[, "Successful"]
+
+svm_cm <- confusionMatrix(
+  svm_pred,
+  test_data_processed$Success_Label
+)
+
+svm_cm
+
+svm_accuracy <- svm_cm$overall["Accuracy"]
+
+svm_roc <- roc(
+  response = test_data_processed$Success_Label,
+  predictor = svm_prob,
+  levels = c("Unsuccessful", "Successful")
+)
+
+plot(svm_roc, main = "ROC Curve - SVM")
+
+svm_auc <- auc(svm_roc)
+
+svm_accuracy
+svm_auc
+svm_model$bestTune
+```
+
+The Support Vector Machine achieved approximately 89% accuracy and an ROC-AUC of 0.950, demonstrating strong predictive performance overall. The radial basis kernel allowed the model to capture nonlinear decision boundaries between successful and unsuccessful restaurants.
+
+Compared to Neural Networks, the SVM performed slightly better in both accuracy and ROC-AUC, suggesting that the kernel-based approach was effective for this classification problem. However, the SVM still underperformed relative to Random Forest and Boosting, likely because tree-based ensemble methods are better suited for handling complex interactions and mixed predictor types in structured business datasets.
+
+Overall, the SVM confirmed that nonlinear modeling approaches substantially outperform simpler linear-style classification methods for predicting restaurant success.
+
+## Model Comparison
+
+```{r, warning=FALSE, message=FALSE, error=TRUE}
+model_results <- data.frame(
+  Model = c(
+    "Classification Tree",
+    "Random Forest",
+    "Boosting",
+    "Neural Network",
+    "SVM"
+  ),
+  Accuracy = c(
+    tree_accuracy,
+    rf_accuracy,
+    boost_accuracy,
+    nn_accuracy,
+    svm_accuracy
+  ),
+  AUC = c(
+    tree_auc,
+    rf_auc,
+    boost_auc,
+    nn_auc,
+    svm_auc
+  )
+)
+
+model_results <- model_results %>%
+  mutate(
+    Accuracy = round(as.numeric(Accuracy), 3),
+    AUC = round(as.numeric(AUC), 3)
+  ) %>%
+  arrange(desc(AUC))
+
+model_results
+
+ggplot(
+  model_results,
+  aes(x = reorder(Model, AUC), y = AUC, fill = Model)
+) +
+  geom_col() +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Model Comparison by ROC-AUC",
+    x = "Model",
+    y = "AUC"
+  ) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold")
+  )
+```
+
+The model comparison results indicate that nonlinear ensemble methods performed best overall for predicting restaurant success. Random Forest achieved the highest ROC-AUC, followed closely by Boosting, while the Classification Tree also performed surprisingly well. Neural Networks and Support Vector Machines demonstrated solid predictive ability but were less effective than the tree-based ensemble methods.
+
+Although the Classification Tree achieved slightly higher raw accuracy than Random Forest, Random Forest produced superior ROC-AUC performance, suggesting better overall classification ability across multiple probability thresholds. This highlights the importance of evaluating models using several metrics rather than relying only on accuracy.
+
+Overall, the results support the original hypothesis that nonlinear machine learning methods are highly effective for predicting restaurant success due to the complex interactions between operational, customer-demand, and marketing variables.
+
+---
+
+# Conclusion and Future Work
+
+## Economic Interpretation
+
+The results of this project have important economic implications for restaurant owners, investors, and business managers. Across nearly all models, marketing budget, social media followers, Google rating, and weekend reservations emerged as highly important predictors of restaurant success. These findings suggest that digital visibility, customer engagement, and online reputation play major roles in driving restaurant performance in modern markets.
+
+The strong importance of social media followers and marketing budget indicates that restaurants may benefit significantly from investing in digital advertising and online engagement strategies. Similarly, higher Google ratings and stronger reservation activity likely reflect customer satisfaction and demand, both of which contribute to long-term business sustainability.
+
+Additionally, the ability to accurately identify potentially unsuccessful restaurants may help investors and business owners make more informed operational and financial decisions. Predictive machine learning models could therefore serve as useful tools for risk management and strategic planning within the restaurant industry.
+
+## Limitations
+
+Several limitations should be considered when interpreting the results of this project. First, the dataset may contain simplified or synthetic relationships that make restaurant success easier to predict than in real-world business environments. As a result, the predictive performance observed in this project may overstate how well these models would perform on real-world restaurant data.
+
+Second, the dataset does not include several potentially important economic variables such as local competition, regional income levels, inflation, labor costs, or macroeconomic conditions that could influence restaurant success. Additionally, the analysis focuses on a relatively limited number of business characteristics and does not account for changing market conditions over time.
+
+Finally, although SMOTE improved class balance during training, synthetic oversampling methods may sometimes introduce artificial patterns that do not fully reflect real-world observations.
+
+Although cross-validation and train/test evaluation were used, the extremely high predictive performance may indicate that the dataset contains unusually separable patterns compared to real-world restaurant environments.
+
+## Final Thoughts
+
+Overall, the project demonstrates that machine learning methods can successfully predict restaurant success using operational, marketing, and customer-demand characteristics. Nonlinear ensemble methods such as Random Forest and Boosting consistently outperformed simpler approaches, supporting the idea that restaurant performance depends on complex interactions between multiple business factors.
+
+The analysis also highlights the growing economic importance of digital visibility and customer engagement within the restaurant industry. Variables related to online reputation, reservations, and marketing consistently emerged as some of the strongest predictors across multiple models.
+
+## Future Work
+
+Future research could improve this analysis by incorporating larger and more realistic datasets that include macroeconomic conditions, geographic competition measures, consumer demographics, and time-series business performance variables. Additional machine learning methods such as XGBoost, LightGBM, or deep learning architectures could also be explored.
+
+Future studies may also investigate regression-based approaches that predict restaurant revenue or profitability directly rather than using binary success classifications. Finally, combining restaurant data with real online review text and sentiment analysis from platforms such as Yelp or Google Reviews could provide additional insights into the relationship between customer perception and business success.
+
+---
+
+\newpage
+
+# References
+
+Kaggle. Yelp Dataset.
+https://www.kaggle.com/datasets/yelp-dataset/yelp-dataset
+
+Prasenjit, C. “Data Modeling for Restaurant Success Prediction.” Medium.
+https://medium.com/@cprasenjit32/data-modeling-for-restaurant-success-prediction-649a16d78dca
+
+Stanford CS229. “Restaurant Success Prediction Using Machine Learning.”
+https://cs229.stanford.edu/proj2017/final-reports/5244334.pdf
+
+Vyshaghin, V. “Restaurant Success Prediction Analysis and Model Building.” Medium.
+https://medium.com/@vyshaghin/restaurant-success-prediction-analysis-and-model-building-42be18326397
