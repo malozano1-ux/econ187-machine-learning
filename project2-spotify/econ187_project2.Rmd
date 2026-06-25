@@ -1,0 +1,827 @@
+---
+title: "Predicting Spotify Song Popularity"
+author: "Manuela Lozano"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\newpage
+
+# Introduction
+
+## Background Information
+
+Music streaming platforms such as Spotify have changed the way consumers discover and interact with music. Today, song popularity is influenced not only by artist recognition, but also by recommendation algorithms, playlists, and listener behavior. Because of this, Spotify audio features such as danceability, energy, loudness, and acousticness have become useful variables for predictive modeling and machine learning analysis.
+
+Previous projects have explored predicting Spotify song popularity using machine learning methods and Spotify audio data. For example, Predicting Spotify Song Popularity Using Machine Learning and the Spotify Tracks Dataset on Kaggle demonstrate how Spotify audio characteristics can be used to model popularity outcomes. In addition, Spotify Popularity Prediction ML Practice applies several machine learning methods to predict song popularity. Building on these ideas, this project compares both linear and nonlinear machine learning models to determine which methods best predict Spotify song popularity.
+
+## Research Question
+
+Are nonlinear machine learning models more effective than traditional linear models at predicting Spotify song popularity using audio features and track characteristics?
+
+## Hypothesis
+
+The hypothesis of this project is that nonlinear machine learning methods such as GAMs, Random Forests, and XGBoost will outperform traditional linear models in predicting Spotify song popularity. This is because listener preferences and streaming behavior are likely driven by complex nonlinear relationships between song characteristics and popularity outcomes.
+
+---
+
+# Data Description
+
+```{r, message=FALSE, warning=FALSE, error=TRUE}
+# Load Libraries
+library(tidyverse)
+library(skimr)
+library(corrplot)
+library(ggcorrplot)
+library(scales)
+library(GGally) 
+
+# Load Data
+spotify_raw <- read.csv("~/Documents/UCLA/YEAR 4/SPRING 2026/ECON 187/PROJECT 2/spotify.csv")
+ 
+# Initial Data Inspection
+glimpse(spotify_raw)
+dim(spotify_raw)
+head(spotify_raw)
+summary(spotify_raw)
+
+# Data Cleaning
+spotify <- spotify_raw %>%
+  # Remove unnecessary columns
+  select(-c(X, track_id, artists, album_name, track_name)) %>%
+  # Remove missing values
+  drop_na() %>%
+  # Convert explicit to binary
+  mutate(explicit = ifelse(explicit == TRUE | explicit == "True", 1, 0)) %>%
+  # Convert genre to factor
+  mutate(track_genre = as.factor(track_genre)) %>%
+  # Convert duration to seconds
+  mutate(duration_s = duration_ms / 1000) %>%
+  # Remove original duration variable
+  select(-duration_ms) %>%
+  # Remove duplicates
+  distinct()
+
+# Final Dataset Dimensions
+cat("Rows:", nrow(spotify), "\n")
+cat("Columns:", ncol(spotify), "\n")
+
+# Data Description
+skim_summary <- skim(spotify) %>%
+  select(-where(is.list))
+skim_summary
+summary(spotify)
+```
+
+The cleaned Spotify dataset contains over 106,000 songs and 16 variables that describe different audio features and track characteristics. The average popularity score is around 35, which suggests that most songs reach moderate popularity levels, while only a smaller number become extremely popular. The dataset includes a lot of variation in features like danceability, energy, loudness, acousticness, and valence, showing that songs on Spotify differ widely in style and sound. It also includes many different genres as well as both explicit and non-explicit songs, which helps capture a broad range of listener preferences. Overall, the dataset is large and diverse enough to effectively compare how well different machine learning models can predict Spotify song popularity.
+
+# Exploratory Data Analysis
+
+```{r}
+# Create smaller sample for visualization
+set.seed(123)
+
+spotify_sample <- spotify %>%
+  sample_n(10000)
+
+# Distribution of Popularity
+ggplot(spotify, aes(x = popularity)) +
+  geom_histogram(
+    bins = 30,
+    fill = "steelblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Distribution of Spotify Song Popularity",
+    x = "Popularity Score",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+# Top Genres
+spotify %>%
+  count(track_genre, sort = TRUE) %>%
+  slice_head(n = 10) %>%
+  ggplot(aes(
+    x = reorder(track_genre, n),
+    y = n
+  )) +
+  geom_col(fill = "darkgreen") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Spotify Genres",
+    x = "Genre",
+    y = "Number of Songs"
+  ) +
+  theme_minimal()
+
+# Correlation Matrix
+numeric_data <- spotify %>%
+  select(where(is.numeric))
+
+cor_matrix <- cor(numeric_data)
+
+ggcorrplot(
+  cor_matrix,
+  hc.order = TRUE,
+  type = "lower",
+  lab = TRUE,
+  lab_size = 3
+)
+
+# Popularity vs Danceability
+ggplot(spotify_sample,
+       aes(x = danceability,
+           y = popularity)) +
+  geom_point(alpha = 0.15) +
+  geom_smooth(
+    method = "gam",
+    formula = y ~ s(x),
+    se = FALSE,
+    color = "red"
+  ) +
+  labs(
+    title = "Popularity vs Danceability",
+    x = "Danceability",
+    y = "Popularity"
+  ) +
+  theme_minimal()
+
+# Popularity vs Energy
+ggplot(spotify_sample,
+       aes(x = energy,
+           y = popularity)) +
+  geom_point(alpha = 0.15) +
+  geom_smooth(
+    method = "gam",
+    formula = y ~ s(x),
+    se = FALSE,
+    color = "blue"
+  ) +
+  labs(
+    title = "Popularity vs Energy",
+    x = "Energy",
+    y = "Popularity"
+  ) +
+  theme_minimal()
+
+# Popularity vs Loudness
+ggplot(spotify_sample,
+       aes(x = loudness,
+           y = popularity)) +
+  geom_point(alpha = 0.15) +
+  geom_smooth(
+    method = "gam",
+    formula = y ~ s(x),
+    se = FALSE,
+    color = "purple"
+  ) +
+  labs(
+    title = "Popularity vs Loudness",
+    x = "Loudness",
+    y = "Popularity"
+  ) +
+  theme_minimal()
+
+# Explicit vs Non-Explicit Songs
+ggplot(spotify,
+       aes(x = factor(explicit),
+           y = popularity,
+           fill = factor(explicit))) +
+  geom_boxplot(alpha = 0.8) +
+  labs(
+    title = "Popularity of Explicit vs Non-Explicit Songs",
+    x = "Explicit",
+    y = "Popularity"
+  ) +
+  theme_minimal() +
+  guides(fill = "none")
+
+# Popularity by Genre
+spotify %>%
+  group_by(track_genre) %>%
+  summarize(
+    avg_popularity = mean(popularity)
+  ) %>%
+  arrange(desc(avg_popularity)) %>%
+  slice_head(n = 10) %>%
+  ggplot(aes(
+    x = reorder(track_genre, avg_popularity),
+    y = avg_popularity
+  )) +
+  geom_col(fill = "tomato") +
+  coord_flip() +
+  labs(
+    title = "Top Genres by Average Popularity",
+    x = "Genre",
+    y = "Average Popularity"
+  ) +
+  theme_minimal()
+
+# Pairwise Relationships
+spotify_sample %>%
+  select(
+    popularity,
+    danceability,
+    energy,
+    loudness,
+    acousticness,
+    valence,
+    tempo
+  ) %>%
+  ggpairs()
+```
+
+The exploratory data analysis reveals several important patterns in Spotify song popularity. First, popularity is concentrated around moderate values, with relatively few songs achieving extremely high popularity scores. The correlation matrix and pairwise plots indicate that variables such as danceability, loudness, energy, and valence exhibit meaningful relationships with popularity, although many of these relationships appear nonlinear rather than strictly linear. The GAM smoothing curves further support the presence of nonlinear trends, particularly for danceability and loudness. In addition, explicit songs and certain genres tend to exhibit higher average popularity levels. Overall, the EDA suggests that flexible nonlinear machine learning methods may be better suited for modeling Spotify popularity than traditional linear regression approaches.
+
+---
+
+# Methodology 
+
+## Train/Test Split
+
+```{r}
+# TRAIN / TEST SPLIT
+library(caret)
+
+set.seed(123)
+
+# Create train/test split
+train_index <- createDataPartition(
+  spotify$popularity,
+  p = 0.80,
+  list = FALSE
+)
+
+train_data <- spotify[train_index, ]
+test_data  <- spotify[-train_index, ]
+
+cat("Training observations:", nrow(train_data), "\n")
+cat("Testing observations:", nrow(test_data), "\n")
+
+# MODEL MATRIX
+x_train <- model.matrix(popularity ~ ., train_data)[, -1]
+y_train <- train_data$popularity
+
+x_test <- model.matrix(popularity ~ ., test_data)[, -1]
+y_test <- test_data$popularity
+
+# EVALUATION FUNCTION
+evaluate_model <- function(actual, predicted) {
+
+  rmse <- sqrt(mean((actual - predicted)^2))
+
+  mae <- mean(abs(actual - predicted))
+
+  r2 <- 1 - sum((actual - predicted)^2) /
+    sum((actual - mean(actual))^2)
+
+  return(data.frame(
+    RMSE = rmse,
+    MAE = mae,
+    R2 = r2
+  ))
+}
+```
+
+The dataset was divided into training and testing samples using an 80/20 split in order to evaluate model performance on unseen data. This approach helps prevent overfitting and provides a more realistic assessment of predictive accuracy. In addition, the use of a common evaluation framework across all models ensures that performance comparisons remain consistent and reliable.
+
+---
+
+# Results
+
+## Baseline Regression
+
+```{r}
+library(glmnet)
+library(pls)
+library(splines)
+library(mgcv)
+library(randomForest)
+library(ipred)
+library(xgboost)
+ 
+# Results table
+results <- data.frame(Model = character(), RMSE = numeric(),
+                      MAE = numeric(), R2 = numeric())
+
+baseline <- lm(popularity ~ ., data = train_data)
+baseline_pred <- predict(baseline, newdata = test_data)
+summary(baseline)
+results <- rbind(results, cbind(Model = "Baseline", evaluate_model(y_test, baseline_pred)))
+results[results$Model == "Baseline", ]
+
+ggplot(data.frame(Actual = y_test,
+                  Predicted = baseline_pred),
+       aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.15, color = "steelblue") +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "red") +
+  labs(
+    title = "Baseline Regression: Actual vs Predicted",
+    x = "Actual Popularity",
+    y = "Predicted Popularity"
+  ) +
+  theme_minimal()
+```
+
+The baseline linear regression model provides a useful benchmark for predicting Spotify popularity. While several variables appear statistically significant, the model achieves only moderate predictive performance, suggesting that purely linear relationships may not fully explain variation in song popularity. This result motivates the use of regularization and nonlinear machine learning approaches in later sections.
+
+## Ridge Regression
+
+```{r}
+set.seed(123)
+ridge_cv    <- cv.glmnet(x_train, y_train, alpha = 0, nfolds = 10)
+ridge_pred  <- predict(ridge_cv, s = "lambda.min", newx = x_test)
+results     <- rbind(results, cbind(Model = "Ridge", evaluate_model(y_test, ridge_pred)))
+results[results$Model == "Ridge", ]
+ 
+plot(ridge_cv, main = "Ridge: CV Error vs Lambda")
+
+ggplot(data.frame(Actual = y_test,
+                  Predicted = as.vector(ridge_pred)),
+       aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.15, color = "darkgreen") +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "red") +
+  labs(
+    title = "Ridge Regression: Actual vs Predicted",
+    x = "Actual Popularity",
+    y = "Predicted Popularity"
+  ) +
+  theme_minimal()
+```
+
+Ridge regression slightly improves predictive stability by shrinking coefficient estimates and reducing multicollinearity among highly correlated audio features. However, the improvement over the baseline linear model is relatively modest, indicating that the primary limitation may not be overfitting alone but rather the inability of linear models to capture nonlinear patterns in listener preferences.
+
+## LASSO Regression
+
+```{r}
+set.seed(123)
+lasso_cv   <- cv.glmnet(x_train, y_train, alpha = 1, nfolds = 10)
+lasso_pred <- predict(lasso_cv, s = "lambda.min", newx = x_test)
+results    <- rbind(results, cbind(Model = "LASSO", evaluate_model(y_test, lasso_pred)))
+results[results$Model == "LASSO", ]
+ 
+plot(lasso_cv, main = "LASSO: CV Error vs Lambda")
+ 
+# Non-zero coefficients
+lasso_coefs <- coef(lasso_cv, s = "lambda.min")
+cat("LASSO non-zero coefficients:", sum(lasso_coefs != 0) - 1, "\n")
+
+ggplot(data.frame(Actual = y_test,
+                  Predicted = as.vector(lasso_pred)),
+       aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.15, color = "purple") +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "red") +
+  labs(
+    title = "LASSO Regression: Actual vs Predicted",
+    x = "Actual Popularity",
+    y = "Predicted Popularity"
+  ) +
+  theme_minimal()
+```
+
+LASSO regression performs variable selection by shrinking some coefficients toward zero, allowing the model to identify the most important predictors of song popularity. Despite this regularization, the model performs similarly to Ridge and the baseline regression, suggesting that the dataset already contains many relevant predictors and that nonlinear structure may be more important than variable selection alone.
+
+## Elastic Net
+
+```{r}
+set.seed(123)
+enet_cv   <- cv.glmnet(x_train, y_train, alpha = 0.5, nfolds = 10)
+enet_pred <- predict(enet_cv, s = "lambda.min", newx = x_test)
+results   <- rbind(results, cbind(Model = "Elastic Net", evaluate_model(y_test, enet_pred)))
+results[results$Model == "Elastic Net", ]
+ 
+plot(enet_cv, main = "Elastic Net: CV Error vs Lambda")
+
+ggplot(data.frame(Actual = y_test,
+                  Predicted = as.vector(enet_pred)),
+       aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.15, color = "orange") +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "red") +
+  labs(
+    title = "Elastic Net: Actual vs Predicted",
+    x = "Actual Popularity",
+    y = "Predicted Popularity"
+  ) +
+  theme_minimal()
+```
+
+Elastic Net combines the strengths of Ridge and LASSO regression by simultaneously shrinking coefficients and selecting variables. The results are comparable to the other regularized linear models, indicating that while regularization helps stabilize predictions, linear methods remain limited in their ability to fully capture the complexity of Spotify popularity dynamics.
+
+## PCA Regression
+
+```{r}
+set.seed(123)
+pca_model  <- pcr(popularity ~ ., data = train_data, scale = TRUE, validation = "CV")
+best_ncomp <- which.min(RMSEP(pca_model)$val[1, 1, -1])
+cat("PCA best components:", best_ncomp, "\n")
+ 
+pca_pred <- predict(pca_model, newdata = test_data, ncomp = best_ncomp)
+results  <- rbind(results, cbind(Model = "PCA", evaluate_model(y_test, as.vector(pca_pred))))
+results[results$Model == "PCA", ]
+ 
+validationplot(pca_model, val.type = "RMSEP", main = "PCA: RMSEP vs Components")
+
+ggplot(data.frame(Actual = y_test,
+                  Predicted = as.vector(pca_pred)),
+       aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.15, color = "brown") +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "red") +
+  labs(
+    title = "PCA Regression: Actual vs Predicted",
+    x = "Actual Popularity",
+    y = "Predicted Popularity"
+  ) +
+  theme_minimal()
+```
+
+Principal Components Regression reduces dimensionality by transforming the original predictors into orthogonal principal components. However, the predictive performance is nearly identical to the baseline regression model, suggesting that dimensionality reduction does not substantially improve prediction accuracy for this dataset. This indicates that most predictive information is already captured in the original feature space.
+
+## Piecewise Polynomial
+
+```{r}
+pp_model <- lm(
+  popularity ~ bs(danceability, df = 6) + energy + loudness +
+    speechiness + acousticness + instrumentalness + liveness +
+    valence + tempo + explicit + key + mode + time_signature +
+    duration_s + track_genre,
+  data = train_data
+)
+ 
+pp_pred <- predict(pp_model, newdata = test_data)
+results <- rbind(results, cbind(Model = "Piecewise Poly", evaluate_model(y_test, pp_pred)))
+results[results$Model == "Piecewise Poly", ]
+
+ggplot(data.frame(Actual = y_test,
+                  Predicted = pp_pred),
+       aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.15, color = "darkcyan") +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "red") +
+  labs(
+    title = "Piecewise Polynomial: Actual vs Predicted",
+    x = "Actual Popularity",
+    y = "Predicted Popularity"
+  ) +
+  theme_minimal()
+```
+
+Piecewise polynomial regression introduces nonlinear flexibility into the model by allowing relationships between predictors and popularity to vary across different regions of the data. The slight improvement in predictive performance relative to linear models suggests that nonlinear effects are present, particularly for variables such as danceability and loudness.
+
+## Splines
+
+```{r}
+spline_model <- lm(
+  popularity ~ ns(danceability, df = 4) + ns(energy, df = 4) +
+    ns(loudness, df = 4) + speechiness + acousticness +
+    instrumentalness + liveness + valence + tempo +
+    explicit + key + mode + time_signature + duration_s + track_genre,
+  data = train_data
+)
+ 
+spline_pred <- predict(spline_model, newdata = test_data)
+results     <- rbind(results, cbind(Model = "Splines", evaluate_model(y_test, spline_pred)))
+results[results$Model == "Splines", ]
+
+ggplot(data.frame(Actual = y_test,
+                  Predicted = spline_pred),
+       aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.15, color = "magenta") +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "red") +
+  labs(
+    title = "Splines: Actual vs Predicted",
+    x = "Actual Popularity",
+    y = "Predicted Popularity"
+  ) +
+  theme_minimal()
+```
+
+Spline regression further improves flexibility by fitting smooth nonlinear functions to the predictors. The improved RMSE and R2 relative to the linear models provide evidence that Spotify popularity depends on nonlinear relationships between audio characteristics and listener engagement.
+
+## Generalized Additive Models
+
+```{r}
+gam_model <- gam(
+  popularity ~ s(danceability) + s(energy) + s(loudness) +
+    s(speechiness) + s(acousticness) + s(valence) + s(tempo) +
+    explicit + key + mode + time_signature + duration_s + track_genre,
+  data = train_data, method = "REML"
+)
+ 
+gam_pred <- predict(gam_model, newdata = test_data)
+results  <- rbind(results, cbind(Model = "GAM", evaluate_model(y_test, gam_pred)))
+results[results$Model == "GAM", ]
+ 
+# Smooth term plots
+par(mfrow = c(2, 3))
+plot(gam_model, shade = TRUE, col = "steelblue", shade.col = "lightblue")
+par(mfrow = c(1, 1))
+
+ggplot(data.frame(Actual = y_test,
+                  Predicted = gam_pred),
+       aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.15, color = "darkblue") +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "red") +
+  labs(
+    title = "GAM: Actual vs Predicted",
+    x = "Actual Popularity",
+    y = "Predicted Popularity"
+  ) +
+  theme_minimal()
+```
+
+The Generalized Additive Model achieves one of the strongest performances among all models, highlighting the importance of nonlinear effects in predicting Spotify popularity. The smooth component plots indicate that variables such as danceability, energy, loudness, and acousticness influence popularity in highly nonlinear ways. These findings suggest that listener preferences may exhibit threshold effects, diminishing returns, and other complex behavioral patterns.
+
+## Random Forest
+
+```{r, error=TRUE}
+set.seed(123)
+
+# Create RF datasets using dummy variables
+rf_train <- data.frame(
+  popularity = y_train,
+  x_train
+)
+
+rf_test <- data.frame(x_test)
+
+# Smaller sample for speed
+rf_sample_index <- sample(
+  1:nrow(rf_train),
+  20000
+)
+
+rf_train_sample <- rf_train[rf_sample_index, ]
+
+rf_model <- randomForest(
+  popularity ~ .,
+  data = rf_train_sample,
+  ntree = 100,
+  mtry = floor(sqrt(ncol(rf_train_sample) - 1)),
+  importance = TRUE
+)
+
+rf_pred <- predict(
+  rf_model,
+  newdata = rf_test
+)
+
+results <- rbind(
+  results,
+  cbind(
+    Model = "Random Forest",
+    evaluate_model(y_test, rf_pred)
+  )
+)
+results[results$Model == "Random Forest", ]
+
+varImpPlot(
+  rf_model,
+  n.var = 15,
+  main = "Random Forest: Variable Importance"
+)
+
+ggplot(data.frame(Actual = y_test,
+                  Predicted = rf_pred),
+       aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.15, color = "forestgreen") +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "red") +
+  labs(
+    title = "Random Forest: Actual vs Predicted",
+    x = "Actual Popularity",
+    y = "Predicted Popularity"
+  ) +
+  theme_minimal()
+```
+
+Random Forest achieves the best predictive performance among all models considered in this project. By combining many decision trees and averaging their predictions, the model captures complex nonlinear interactions between audio features and genres without requiring a predefined functional form. The variable importance plots suggest that factors such as acousticness, instrumentalness, energy, and danceability play especially important roles in predicting popularity. These findings indicate that Spotify listener preferences are driven by highly nonlinear and interactive relationships.
+
+## Bagging
+
+```{r}
+set.seed(123)
+bag_model <- bagging(popularity ~ ., data = train_data, nbagg = 100, coob = TRUE)
+bag_pred  <- predict(bag_model, newdata = test_data)
+results   <- rbind(results, cbind(Model = "Bagging", evaluate_model(y_test, bag_pred)))
+results[results$Model == "Bagging", ]
+
+ggplot(data.frame(Actual = y_test,
+                  Predicted = bag_pred),
+       aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.15, color = "goldenrod") +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "red") +
+  labs(
+    title = "Bagging: Actual vs Predicted",
+    x = "Actual Popularity",
+    y = "Predicted Popularity"
+  ) +
+  theme_minimal()
+```
+
+Bagging improves prediction stability by averaging predictions across many bootstrap samples. While the model performs reasonably well, its predictive accuracy is slightly weaker than the best-performing nonlinear methods. This suggests that ensemble averaging alone may not be sufficient to fully capture the complex interactions present in the Spotify dataset.
+
+## XGBoost 
+
+```{r}
+dtrain <- xgb.DMatrix(data = x_train, label = y_train)
+dtest  <- xgb.DMatrix(data = x_test,  label = y_test)
+ 
+set.seed(123)
+xgb_model <- xgboost(data = dtrain, nrounds = 200, verbose = 0,
+                     params = list(objective = "reg:squarederror",
+                                   eta = 0.1, max_depth = 6))
+ 
+xgb_pred <- predict(xgb_model, newdata = dtest)
+results  <- rbind(results, cbind(Model = "XGBoost", evaluate_model(y_test, xgb_pred)))
+results[results$Model == "XGBoost", ]
+ 
+xgb_imp <- xgb.importance(model = xgb_model)
+xgb.plot.importance(xgb_imp[1:15, ], main = "XGBoost: Feature Importance")
+
+ggplot(data.frame(Actual = y_test,
+                  Predicted = xgb_pred),
+       aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.15, color = "black") +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", color = "red") +
+  labs(
+    title = "XGBoost: Actual vs Predicted",
+    x = "Actual Popularity",
+    y = "Predicted Popularity"
+  ) +
+  theme_minimal()
+```
+
+XGBoost achieves one of the strongest predictive performances among all models considered in this project. Its ability to sequentially reduce prediction errors and capture complex nonlinear interactions allows it to outperform both traditional econometric methods and simpler machine learning models. The feature importance analysis suggests that audio characteristics such as instrumentalness, acousticness, loudness, energy, and danceability contribute strongly to predictive accuracy. These findings reinforce the importance of flexible nonlinear methods for modeling consumer preferences in digital streaming markets.
+
+## Comparison of All Models
+
+```{r}
+results$RMSE <- as.numeric(results$RMSE)
+results$MAE  <- as.numeric(results$MAE)
+results$R2   <- as.numeric(results$R2)
+results      <- results[order(results$RMSE), ]
+ 
+cat("\n===== MODEL COMPARISON =====\n")
+print(results)
+ 
+# RMSE bar chart
+ggplot(results, aes(x = reorder(Model, RMSE), y = RMSE, fill = RMSE == min(RMSE))) +
+  geom_col(width = 0.7) +
+  scale_fill_manual(values = c("steelblue", "tomato"), guide = "none") +
+  coord_flip() +
+  labs(title = "Model Comparison: Test RMSE", x = NULL, y = "RMSE") +
+  theme_minimal()
+ 
+# R2 bar chart
+ggplot(results, aes(x = reorder(Model, R2), y = R2, fill = R2 == max(R2))) +
+  geom_col(width = 0.7) +
+  scale_fill_manual(values = c("steelblue", "tomato"), guide = "none") +
+  coord_flip() +
+  labs(title = "Model Comparison: Test R²", x = NULL, y = "R²") +
+  theme_minimal()
+
+# Create a data frame with actual values and predictions from each model
+fit_plots <- data.frame(
+  Actual = y_test,
+  Baseline = as.vector(baseline_pred),
+  Ridge = as.vector(ridge_pred),
+  LASSO = as.vector(lasso_pred),
+  Elastic_Net = as.vector(enet_pred),
+  PCA = as.vector(pca_pred),
+  Piecewise_Poly = as.vector(pp_pred),
+  Splines = as.vector(spline_pred),
+  GAM = as.vector(gam_pred),
+  Random_Forest = as.vector(rf_pred),
+  Bagging = as.vector(bag_pred),
+  XGBoost = as.vector(xgb_pred)
+)
+
+# Convert to long format for plotting
+fit_plots_long <- fit_plots %>%
+  pivot_longer(
+    cols = -Actual,
+    names_to = "Model",
+    values_to = "Predicted"
+  )
+
+# Actual vs Predicted plot for all models
+ggplot(fit_plots_long, aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.15) +
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linetype = "dashed",
+    color = "red"
+  ) +
+  facet_wrap(~ Model, scales = "free") +
+  labs(
+    title = "Actual vs Predicted Spotify Popularity by Model",
+    x = "Actual Popularity",
+    y = "Predicted Popularity"
+  ) +
+  theme_minimal()
+```
+
+The comparison of all models demonstrates that nonlinear machine learning methods outperform traditional linear approaches in predicting Spotify song popularity. Random Forest achieved the strongest overall performance with the lowest RMSE and highest out-of-sample R2, closely followed by XGBoost. These findings suggest that the relationship between audio characteristics and listener engagement is highly nonlinear and involves complex interactions between variables. In contrast, the linear models, including Ridge, LASSO, Elastic Net, and PCA regression, produced nearly identical performance levels, indicating that regularization alone does not substantially improve predictive accuracy. Overall, the results support the hypothesis that nonlinear methods are more appropriate for modeling Spotify popularity.
+
+## Bootstrap CI on RMSE (n=200)
+
+```{r, error=TRUE}
+set.seed(123)
+all_preds <- list(
+  Baseline      = baseline_pred,
+  Ridge         = as.vector(ridge_pred),
+  LASSO         = as.vector(lasso_pred),
+  "Elastic Net" = as.vector(enet_pred),
+  PCA           = as.vector(pca_pred),
+  "Piecewise Poly" = pp_pred,
+  Splines       = spline_pred,
+  GAM           = gam_pred,
+  "Random Forest" = rf_pred,
+  Bagging       = bag_pred,
+  XGBoost       = xgb_pred
+)
+ 
+boot_ci <- function(actual, predicted, B = 200) {
+  rmses <- replicate(B, {
+    i <- sample(length(actual), replace = TRUE)
+    sqrt(mean((actual[i] - predicted[i])^2))
+  })
+  data.frame(mean = round(mean(rmses), 3),
+             lower = round(quantile(rmses, 0.025), 3),
+             upper = round(quantile(rmses, 0.975), 3))
+}
+ 
+boot_results <- do.call(rbind, lapply(names(all_preds), function(m) {
+  cbind(Model = m, boot_ci(y_test, all_preds[[m]]))
+}))
+ 
+cat("\n===== BOOTSTRAP RMSE (95% CI) =====\n")
+print(boot_results)
+ 
+# Forest plot
+boot_results$mean  <- as.numeric(boot_results$mean)
+boot_results$lower <- as.numeric(boot_results$lower)
+boot_results$upper <- as.numeric(boot_results$upper)
+ 
+ggplot(boot_results, aes(x = reorder(Model, -mean), y = mean,
+                         ymin = lower, ymax = upper)) +
+  geom_point(size = 3, color = "steelblue") +
+  geom_errorbar(width = 0.3, color = "steelblue") +
+  coord_flip() +
+  labs(title = "Bootstrap RMSE with 95% CI (B = 200)",
+       x = NULL, y = "RMSE") +
+  theme_minimal()
+```
+
+The bootstrap confidence intervals provide additional evidence regarding the stability and reliability of the model comparison results. Across 200 bootstrap resamples, the nonlinear models consistently achieved lower RMSE values than the traditional linear approaches, indicating that their superior predictive performance is robust rather than driven by random variation in the testing sample. In particular, Random Forest and XGBoost maintained the strongest performance with relatively narrow confidence intervals, suggesting stable out-of-sample prediction accuracy. The bootstrap analysis therefore reinforces the conclusion that nonlinear machine learning methods are more appropriate for modeling Spotify song popularity than standard linear regression techniques.
+
+---
+
+# Conclusion and Future Work
+
+## Economic Interpretation
+
+From an economic perspective, the results suggest that consumer preferences in music streaming markets are shaped by complex and nonlinear behavioral patterns. Audio features such as danceability, loudness, energy, and acousticness influence popularity in ways that cannot be fully captured through simple linear relationships. This reflects the broader reality of digital platform markets, where popularity is driven not only by observable product characteristics but also by recommendation algorithms, social influence, viral dynamics, and listener heterogeneity. The superior performance of Random Forest and XGBoost demonstrates that flexible machine learning methods are better suited for modeling these complex interactions than traditional econometric approaches alone.
+
+## Limitations
+
+Several limitations should be acknowledged. First, the dataset only contains observable audio features and does not include important external factors such as playlist placement, artist reputation, marketing exposure, social media trends, or release timing. Second, the popularity metric reflects Spotify-specific engagement and may not fully capture broader music market success. Third, although nonlinear methods improved predictive performance, the moderate R2 values indicate that a large portion of variation in popularity remains unexplained. Finally, some machine learning models, particularly ensemble methods, sacrifice interpretability in exchange for predictive accuracy, making it more difficult to identify precise causal relationships between audio characteristics and popularity outcomes.
+
+## Final Thoughts
+
+Overall, this project demonstrates that nonlinear machine learning methods provide meaningful improvements in predicting Spotify song popularity relative to traditional linear models. While regularized linear regressions remain useful benchmarks, ensemble methods such as Random Forest and XGBoost are more effective at capturing the complex structure underlying listener preferences. The findings support the hypothesis that music popularity depends on nonlinear interactions between audio characteristics and listener behavior rather than simple linear relationships alone. More broadly, this project highlights the growing importance of machine learning techniques in modern economic forecasting and digital market analysis.
+
+## Future Works 
+
+Future research could incorporate additional sources of information such as artist-level characteristics, playlist exposure, social media engagement, release timing, and streaming history over time. Future models may also benefit from deep learning approaches, natural language processing on song lyrics, or hybrid recommender-system frameworks that combine collaborative filtering with audio-feature analysis. Expanding the analysis to panel or time-series settings could also improve understanding of how popularity evolves dynamically over time. In addition, future work could explore causal inference techniques to better distinguish correlation from causation in determining music popularity outcomes.
+
+---
+
+# References
+
+https://medium.com/@akashramesh445/predicting-spotify-song-popularity-using-machine-learning-185f392d1e87
+
+https://www.kaggle.com/datasets/maharshipandya/-spotify-tracks-dataset
+
+https://www.kaggle.com/code/pelinsoylu/spotify-popularity-prediction-ml-practice
+
+
